@@ -1,0 +1,10 @@
+.git
+.gitattributes
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+.claude/
+data/pdfs/
+.DS_Store

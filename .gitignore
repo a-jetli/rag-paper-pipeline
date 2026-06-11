@@ -1,0 +1,10 @@
+.env
+data/pdfs/
+backups/
+cache/
+__pycache__/
+*.pyc
+*.md
+.DS_Store
+.claude/
+!README.md
