@@ -1,6 +1,6 @@
 from flashrank import Ranker, RerankRequest
 
-RELEVANCE_THRESHOLD = 0.95
+RELEVANCE_THRESHOLD = 0.5
 RERANKER_MODEL = "ms-marco-TinyBERT-L-2-v2"
 
 _ranker: Ranker | None = None
