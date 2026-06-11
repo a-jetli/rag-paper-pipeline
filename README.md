@@ -112,6 +112,8 @@ curl -X POST http://localhost:8000/query \
   -d '{"query": "How does ColBERT handle late interaction?"}'
 ```
 
+**GET /papers** returns the full corpus as a browsable list of 1000 entries, each with its arXiv id, title, authors, topic, year, and a link to the arXiv abstract page. The frontend uses this to render a filterable paper browser.
+
 **GET /health** returns `{"status": "ok"}` for the platform's health check.
 
 
