@@ -94,7 +94,7 @@ def run_full_retrieval(query: str, collection: chromadb.Collection, bm25_index: 
     from src.rerank import rerank
 
     merged = retrieve(query, collection, bm25_index)
-    return rerank(query, merged, top_n=5)
+    return rerank(query, merged, top_n=8)
 
 
 def retrieve(query: str, collection: chromadb.Collection, bm25_index: BM25Index) -> list[dict]:

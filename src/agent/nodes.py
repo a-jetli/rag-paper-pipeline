@@ -1,6 +1,6 @@
 from openai import OpenAI
 from src.agent.state import AgentState, QueryPlan, InformationCheck
-from src.generate import SYSTEM_PROMPT, GENERATION_MODEL, TEMPERATURE
+from src.generate import SYSTEM_PROMPT, GENERATION_MODEL, SYNTHESIZER_MODEL, TEMPERATURE
 
 _client: OpenAI | None = None
 
@@ -147,7 +147,7 @@ def synthesizer_node(state: AgentState) -> dict:
     user_prompt = f"Context:\n---\n{context}\n---\n\nQuestion: {state['original_query']}"
 
     response = _get_client().chat.completions.create(
-        model=GENERATION_MODEL,
+        model=SYNTHESIZER_MODEL,
         temperature=TEMPERATURE,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
