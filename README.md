@@ -1,6 +1,3 @@
-Live demo at [https://a-jetli.github.io/rag-paper-demo-live/](https://a-jetli.github.io/rag-paper-demo-live/)
-
-
 ---
 title: arXiv RAG Pipeline
 emoji: 📚
@@ -11,6 +8,10 @@ app_port: 7860
 pinned: false
 ---
 
+Live demo at [https://a-jetli.github.io/rag-paper-demo-live/](https://a-jetli.github.io/rag-paper-demo-live/)
+
+
+---
 # arXiv RAG Pipeline
 
 This is a retrieval augmented generation system that answers questions about AI and ML research by pulling directly from a curated set of about 1000 arXiv papers. It started as the simplest possible RAG setup (embed, retrieve, generate) and evolved through several iterations, each one built to fix a specific failure mode I observed in the previous version. The final system decomposes complex queries, retrieves across multiple signals, reranks with a cross encoder, grades its own context for sufficiency, and retries with reformulated queries when it decides it hasn't found enough. It's deployed as a REST API on Hugging Face Spaces and also runs as a local CLI.
