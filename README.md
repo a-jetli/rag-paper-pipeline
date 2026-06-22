@@ -1,3 +1,6 @@
+Live demo at [https://a-jetli.github.io/rag-paper-demo-live/](https://a-jetli.github.io/rag-paper-demo-live/)
+
+
 ---
 title: arXiv RAG Pipeline
 emoji: 📚
