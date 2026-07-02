@@ -16,9 +16,11 @@ PLANNER_SYSTEM = (
     "Analyze the user's question and determine if it requires information from "
     "multiple distinct papers or topics (compound) or can be answered from a single "
     "source (simple). For compound queries, decompose into 1-3 standalone search "
-    "queries, each targeting one specific aspect. Make sub-queries keyword-rich and "
-    "specific — they will be used for independent document retrieval. Do not use "
-    "pronouns or references to other sub-queries — each must stand alone."
+    "queries, each targeting one specific aspect. For simple queries, sub_queries "
+    "should contain exactly one entry: the original question rewritten to be "
+    "keyword-rich and specific for document retrieval. sub_queries must never be "
+    "empty. Do not use pronouns or references to other sub-queries — each must "
+    "stand alone."
 )
 
 GRADER_SYSTEM = (
@@ -51,17 +53,38 @@ def planner_node(state: AgentState) -> dict:
         response_format=QueryPlan,
     )
     plan: QueryPlan = response.choices[0].message.parsed
-    return {"is_compound": plan.is_compound, "sub_queries": plan.sub_queries}
+    return {
+        "is_compound": plan.is_compound,
+        "sub_queries": plan.sub_queries,
+        "all_sub_queries": plan.sub_queries,
+    }
 
 
 def make_retriever_node(collection, bm25_index):
     def retriever_node(state: AgentState) -> dict:
+        from concurrent.futures import ThreadPoolExecutor
+        from src.embed_store import embed_texts
         from src.retrieve import run_full_retrieval
+
+        sub_queries = state["sub_queries"]
+
+        # One batched embedding call for all sub-queries instead of one call each.
+        embeddings = embed_texts(sub_queries)
+
+        # Fetch all sub-queries concurrently. Each worker only reads shared
+        # resources (collection, bm25_index, the FlashRank singleton) and
+        # returns its own local list — no shared state is written inside a
+        # worker, so results are merged/deduped here, single-threaded, after
+        # every future has completed.
+        with ThreadPoolExecutor(max_workers=max(1, len(sub_queries))) as pool:
+            per_query_results = list(pool.map(
+                lambda args: run_full_retrieval(args[0], collection, bm25_index, args[1]),
+                zip(sub_queries, embeddings),
+            ))
 
         existing_ids = {c["chunk_id"] for c in state["accumulated_context"]}
         new_chunks = []
-        for sub_query in state["sub_queries"]:
-            results = run_full_retrieval(sub_query, collection, bm25_index)
+        for results in per_query_results:
             for chunk in results:
                 if chunk["chunk_id"] not in existing_ids:
                     existing_ids.add(chunk["chunk_id"])
@@ -125,7 +148,7 @@ def reformulator_node(state: AgentState) -> dict:
         response_format=QueryPlan,
     )
     plan: QueryPlan = response.choices[0].message.parsed
-    return {"sub_queries": plan.sub_queries}
+    return {"sub_queries": plan.sub_queries, "all_sub_queries": plan.sub_queries}
 
 
 def synthesizer_node(state: AgentState) -> dict:

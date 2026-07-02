@@ -69,6 +69,7 @@ def main():
             "original_query": user_input,
             "is_compound": False,
             "sub_queries": [],
+            "all_sub_queries": [],
             "accumulated_context": [],
             "context_sufficient": False,
             "missing_elements": [],
@@ -85,6 +86,7 @@ def main():
 
         if result["retry_count"] > 1:
             print(f"Retries performed: {result['retry_count'] - 1}")
+            print(f"All sub-queries searched across all passes: {result['all_sub_queries']}")
             if result["missing_elements"]:
                 print(f"Missing elements identified: {result['missing_elements']}")
 

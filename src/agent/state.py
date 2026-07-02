@@ -8,6 +8,11 @@ class AgentState(TypedDict):
     original_query: str
     is_compound: bool
     sub_queries: list[str]
+    # Full history of every sub-query searched across all retrieval passes.
+    # `sub_queries` itself gets overwritten by the reformulator each retry
+    # (retriever_node needs only the current pass's queries), so this is the
+    # only field that preserves what was actually searched end to end.
+    all_sub_queries: Annotated[list[str], add]
     accumulated_context: Annotated[list[dict], add]
     context_sufficient: bool
     missing_elements: list[str]

@@ -108,6 +108,7 @@ class QueryResponse(BaseModel):
     answer: str
     query_type: str
     sub_queries: list[str]
+    all_sub_queries: list[str]
     retries: int
     chunks: list[ChunkResponse]
     citations: list[CitationResponse]
@@ -119,6 +120,7 @@ async def query(req: QueryRequest):
         "original_query": req.query,
         "is_compound": False,
         "sub_queries": [],
+        "all_sub_queries": [],
         "accumulated_context": [],
         "context_sufficient": False,
         "missing_elements": [],
@@ -147,6 +149,7 @@ async def query(req: QueryRequest):
         answer=result["final_answer"],
         query_type="compound" if result["is_compound"] else "simple",
         sub_queries=result["sub_queries"],
+        all_sub_queries=result["all_sub_queries"],
         retries=max(0, result["retry_count"] - 1),
         chunks=chunks,
         citations=citations,

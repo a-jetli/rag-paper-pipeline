@@ -1,11 +1,13 @@
 import chromadb
 from src.embed_store import embed_texts
 from src.bm25 import BM25Index
+from src.rerank import rerank
 
-TOP_K = 10          # semantic passage results
-ABSTRACT_K = 4      # semantic abstract results
-BM25_K = 15         # BM25 results (retrieve more, RRF will filter)
+TOP_K = 14          # semantic passage results
+ABSTRACT_K = 6      # semantic abstract results
+BM25_K = 20         # BM25 results (retrieve more, RRF will filter)
 RRF_K = 60          # RRF constant
+RRF_POOL_SIZE = 24  # candidates kept after RRF merge, before reranking
 
 
 def _parse_results(results: dict, chunk_type: str) -> list[dict]:
@@ -55,7 +57,7 @@ def reciprocal_rank_fusion(
             ordered by bm25_score descending (best first)
 
     Returns: list of dicts sorted by rrf_score descending,
-    limited to top 20 results.
+    limited to top RRF_POOL_SIZE results.
     """
     rrf_scores = {}
 
@@ -72,6 +74,16 @@ def reciprocal_rank_fusion(
         if chunk_id not in rrf_scores:
             rrf_scores[chunk_id] = {"rrf_score": 0, "data": result}
         else:
+            # NOTE: this also overwrites "chunk_text" with the BM25 version,
+            # which strips the "Paper Title / Abstract Summary" enrichment
+            # prefix (see BM25Index — it indexes stripped text so repeated
+            # header terms don't inflate IDF). So a chunk matched by both
+            # signals gets the shorter, stripped text downstream (reranker
+            # and synthesizer both read chunk_text), while a chunk matched
+            # by semantic search alone keeps the full enriched text. Verified
+            # this doesn't change which chunks get selected in practice, but
+            # it does mean the exact text reaching the LLM isn't uniform
+            # across chunks for reasons unrelated to relevance.
             rrf_scores[chunk_id]["data"].update(result)
         rrf_scores[chunk_id]["rrf_score"] += contribution
 
@@ -81,28 +93,39 @@ def reciprocal_rank_fusion(
         result["rrf_score"] = item["rrf_score"]
         merged.append(result)
 
-    return merged[:20]
+    return merged[:RRF_POOL_SIZE]
 
 
-def run_full_retrieval(query: str, collection: chromadb.Collection, bm25_index: BM25Index) -> list[dict]:
+def run_full_retrieval(
+    query: str,
+    collection: chromadb.Collection,
+    bm25_index: BM25Index,
+    query_embedding: list[float] | None = None,
+) -> list[dict]:
     """
     Full Level 3 pipeline in one call: embed → semantic search → BM25 → RRF → rerank.
 
     Returns reranked chunks filtered by relevance threshold (top 5 max).
-    Imports rerank locally to avoid circular imports.
-    """
-    from src.rerank import rerank
 
-    merged = retrieve(query, collection, bm25_index)
+    query_embedding: precomputed embedding for this query. Pass this when the
+    caller has already batch-embedded multiple sub-queries in one API call,
+    to avoid a redundant per-query embedding round trip.
+    """
+    merged = retrieve(query, collection, bm25_index, query_embedding)
     return rerank(query, merged, top_n=8)
 
 
-def retrieve(query: str, collection: chromadb.Collection, bm25_index: BM25Index) -> list[dict]:
+def retrieve(
+    query: str,
+    collection: chromadb.Collection,
+    bm25_index: BM25Index,
+    query_embedding: list[float] | None = None,
+) -> list[dict]:
     """
     Hybrid retrieval: semantic search + BM25, merged with RRF.
 
     Steps:
-    1. Embed the query
+    1. Embed the query (or use precomputed query_embedding, if provided)
     2. Run semantic search on abstracts (top ABSTRACT_K)
     3. Run semantic search on passages (top TOP_K)
     4. Combine semantic abstract + passage results into one list
@@ -112,7 +135,8 @@ def retrieve(query: str, collection: chromadb.Collection, bm25_index: BM25Index)
 
     The function signature now requires a bm25_index parameter.
     """
-    query_embedding = embed_texts([query])[0]
+    if query_embedding is None:
+        query_embedding = embed_texts([query])[0]
 
     # Query 1: abstract chunks only
     abstract_results = collection.query(
