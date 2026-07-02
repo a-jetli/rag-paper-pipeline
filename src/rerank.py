@@ -1,4 +1,5 @@
 import json
+import threading
 
 from flashrank import Ranker, RerankRequest
 
@@ -15,24 +16,44 @@ MANIFEST_PATH = "data/corpus_manifest.json"
 TRUSTED_TIERS = {"anchor", "curated"}  # hand-picked, field-defining papers
 
 _ranker: Ranker | None = None
+_ranker_lock = threading.Lock()
 _paper_tiers: dict[str, str] | None = None
+_paper_tiers_lock = threading.Lock()
 
 
 def _get_ranker() -> Ranker:
-    """Lazily load the FlashRank cross-encoder once and reuse it."""
+    """
+    Lazily load the FlashRank cross-encoder once and reuse it.
+
+    Double-checked locking: rerank() runs inside retriever_node's
+    ThreadPoolExecutor workers, so multiple threads can call this
+    concurrently on a cold cache. Without the lock, concurrent first-time
+    construction races on FlashRank's fixed-path model download/extract
+    (one thread deletes the zip while another is still reading it),
+    raising FileNotFoundError. The unlocked check is just a fast path once
+    _ranker is already set — the lock only matters for the first call(s).
+    """
     global _ranker
     if _ranker is None:
-        _ranker = Ranker(model_name=RERANKER_MODEL)
+        with _ranker_lock:
+            if _ranker is None:
+                _ranker = Ranker(model_name=RERANKER_MODEL)
     return _ranker
 
 
 def _get_paper_tiers() -> dict[str, str]:
-    """Lazily load paper_id -> tier from the corpus manifest once and reuse it."""
+    """Lazily load paper_id -> tier from the corpus manifest once and reuse it.
+
+    Same double-checked-locking reasoning as _get_ranker() — this is also
+    called from retriever_node's worker threads.
+    """
     global _paper_tiers
     if _paper_tiers is None:
-        with open(MANIFEST_PATH) as f:
-            manifest = json.load(f)
-        _paper_tiers = {p["paper_id"]: p.get("tier", "") for p in manifest}
+        with _paper_tiers_lock:
+            if _paper_tiers is None:
+                with open(MANIFEST_PATH) as f:
+                    manifest = json.load(f)
+                _paper_tiers = {p["paper_id"]: p.get("tier", "") for p in manifest}
     return _paper_tiers
 
 
