@@ -22,7 +22,7 @@ This is a retrieval augmented generation system that answers questions about AI 
 | Layer | What | Why |
 |---|---|---|
 | Embeddings | OpenAI `text-embedding-3-small` | 1536 dim vectors, good quality at low cost |
-| Generation | gpt-5.4-nano (synthesis) + GPT-4o-mini (planning/grading/reformulation) | The synthesizer writes the final answer with the newer model; the cheaper model handles the structured planning, grading, and reformulation steps. Temperature zero everywhere. |
+| Generation | gpt-5.6-luna (synthesis + planning/grading/reformulation) | One model for every generation step: synthesis of the final answer as well as the structured planning, grading, and reformulation steps. Temperature zero everywhere. |
 | Vector store | ChromaDB | Persistent local storage, simple API, supports metadata filtering |
 | Keyword search | `rank_bm25` (BM25Okapi) | Catches named entities and rare terms that embeddings miss |
 | Reranker | FlashRank `ms-marco-TinyBERT-L-2-v2` | Local cross encoder that reads query and chunk together for real relevance scoring, no API or rate limits, fast on CPU |

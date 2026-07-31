@@ -1,5 +1,5 @@
-GENERATION_MODEL = "gpt-4o-mini"      # planner / grader / reformulator (structured tasks)
-SYNTHESIZER_MODEL = "gpt-5.4-nano"    # final answer generation (deeper, better grounded)
+GENERATION_MODEL = "gpt-5.6-luna"     # planner / grader / reformulator (structured tasks)
+SYNTHESIZER_MODEL = "gpt-5.6-luna"    # final answer generation (deeper, better grounded)
 TEMPERATURE = 0
 
 SYSTEM_PROMPT = """You are a research assistant that answers questions about AI and machine learning papers.
