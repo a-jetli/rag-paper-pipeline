@@ -1,6 +1,12 @@
 from openai import OpenAI
 from src.agent.state import AgentState, QueryPlan, InformationCheck
-from src.generate import SYSTEM_PROMPT, GENERATION_MODEL, SYNTHESIZER_MODEL, TEMPERATURE
+from src.generate import (
+    SYSTEM_PROMPT,
+    GENERATION_MODEL,
+    SYNTHESIZER_MODEL,
+    STRUCTURED_EFFORT,
+    SYNTHESIS_EFFORT,
+)
 
 _client: OpenAI | None = None
 
@@ -45,7 +51,7 @@ REFORMULATOR_SYSTEM = (
 def planner_node(state: AgentState) -> dict:
     response = _get_client().beta.chat.completions.parse(
         model=GENERATION_MODEL,
-        temperature=TEMPERATURE,
+        reasoning_effort=STRUCTURED_EFFORT,
         messages=[
             {"role": "system", "content": PLANNER_SYSTEM},
             {"role": "user", "content": state["original_query"]},
@@ -116,7 +122,7 @@ def grader_node(state: AgentState) -> dict:
 
     response = _get_client().beta.chat.completions.parse(
         model=GENERATION_MODEL,
-        temperature=TEMPERATURE,
+        reasoning_effort=STRUCTURED_EFFORT,
         messages=[
             {"role": "system", "content": GRADER_SYSTEM},
             {"role": "user", "content": user_msg},
@@ -140,7 +146,7 @@ def reformulator_node(state: AgentState) -> dict:
     )
     response = _get_client().beta.chat.completions.parse(
         model=GENERATION_MODEL,
-        temperature=TEMPERATURE,
+        reasoning_effort=STRUCTURED_EFFORT,
         messages=[
             {"role": "system", "content": REFORMULATOR_SYSTEM},
             {"role": "user", "content": user_msg},
@@ -171,7 +177,7 @@ def synthesizer_node(state: AgentState) -> dict:
 
     response = _get_client().chat.completions.create(
         model=SYNTHESIZER_MODEL,
-        temperature=TEMPERATURE,
+        reasoning_effort=SYNTHESIS_EFFORT,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},

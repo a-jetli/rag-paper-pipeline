@@ -1,6 +1,11 @@
 GENERATION_MODEL = "gpt-5.6-luna"     # planner / grader / reformulator (structured tasks)
 SYNTHESIZER_MODEL = "gpt-5.6-luna"    # final answer generation (deeper, better grounded)
-TEMPERATURE = 0
+# gpt-5.6-luna rejects any temperature other than the default 1, so determinism is no
+# longer tunable. reasoning_effort is the replacement control. The structured steps are
+# extraction tasks that ran fine on a non-reasoning model, so they stay at "none";
+# synthesis gets a little reasoning budget for grounded multi-paper answers.
+STRUCTURED_EFFORT = "none"   # planner / grader / reformulator
+SYNTHESIS_EFFORT = "low"     # final answer generation
 
 SYSTEM_PROMPT = """You are a research assistant that answers questions about AI and machine learning papers.
 Answer using ONLY the provided context below. Every claim, definition, number, and mechanism in your
