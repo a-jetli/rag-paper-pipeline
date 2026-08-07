@@ -59,10 +59,14 @@ def planner_node(state: AgentState) -> dict:
         response_format=QueryPlan,
     )
     plan: QueryPlan = response.choices[0].message.parsed
+    # The prompt says sub_queries must never be empty, but Pydantic only checks
+    # the type — list[str] accepts []. An empty list would retrieve nothing and
+    # fail silently, so fall back to searching the original question as typed.
+    sub_queries = plan.sub_queries or [state["original_query"]]
     return {
         "is_compound": plan.is_compound,
-        "sub_queries": plan.sub_queries,
-        "all_sub_queries": plan.sub_queries,
+        "sub_queries": sub_queries,
+        "all_sub_queries": sub_queries,
     }
 
 
@@ -173,7 +177,10 @@ def reformulator_node(state: AgentState) -> dict:
         response_format=QueryPlan,
     )
     plan: QueryPlan = response.choices[0].message.parsed
-    return {"sub_queries": plan.sub_queries, "all_sub_queries": plan.sub_queries}
+    # Same empty-list guard as the planner. Here the sensible fallback is the
+    # gaps the grader named, since finding those is the whole point of the retry.
+    sub_queries = plan.sub_queries or state["missing_elements"] or [state["original_query"]]
+    return {"sub_queries": sub_queries, "all_sub_queries": sub_queries}
 
 
 def synthesizer_node(state: AgentState) -> dict:

@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -116,7 +117,11 @@ class QueryResponse(BaseModel):
 
 @app.post("/query", response_model=QueryResponse)
 async def query(req: QueryRequest):
-    result = agent.invoke({
+    # agent.invoke() is synchronous and does the whole request's work — OpenAI
+    # calls, Chroma queries, reranking. Calling it directly from an async route
+    # would block the event loop, so concurrent requests would queue behind each
+    # other. Handing it to a worker thread lets the loop serve others meanwhile.
+    result = await asyncio.to_thread(agent.invoke, {
         "original_query": req.query,
         "is_compound": False,
         "sub_queries": [],
