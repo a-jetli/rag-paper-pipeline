@@ -89,12 +89,31 @@ def make_retriever_node(collection, bm25_index):
             ))
 
         existing_ids = {c["chunk_id"] for c in state["accumulated_context"]}
-        new_chunks = []
+
+        # Merge this pass's per-sub-query results. A chunk surfaced by several
+        # sub-queries is kept once at its *highest* relevance score; the previous
+        # first-seen rule discarded a stronger later score for no reason other
+        # than sub-query ordering. Sorting by that score then hands the
+        # synthesizer its context in relevance order rather than planner order.
+        #
+        # Caveat: these scores come from separate reranker calls against
+        # different sub-queries, so they are only approximately comparable.
+        # That still beats the arbitrary planner ordering it replaces, and the
+        # max-by-id merge is correct regardless of ordering.
+        best_by_id: dict[str, dict] = {}
         for results in per_query_results:
             for chunk in results:
-                if chunk["chunk_id"] not in existing_ids:
-                    existing_ids.add(chunk["chunk_id"])
-                    new_chunks.append(chunk)
+                if chunk["chunk_id"] in existing_ids:
+                    continue
+                incumbent = best_by_id.get(chunk["chunk_id"])
+                if incumbent is None or chunk.get("relevance_score", 0.0) > incumbent.get("relevance_score", 0.0):
+                    best_by_id[chunk["chunk_id"]] = chunk
+
+        new_chunks = sorted(
+            best_by_id.values(),
+            key=lambda c: c.get("relevance_score", 0.0),
+            reverse=True,
+        )
         return {"accumulated_context": new_chunks}
 
     return retriever_node
