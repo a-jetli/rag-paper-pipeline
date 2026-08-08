@@ -74,7 +74,7 @@ def make_retriever_node(collection, bm25_index):
     def retriever_node(state: AgentState) -> dict:
         from concurrent.futures import ThreadPoolExecutor
         from src.embed_store import embed_texts
-        from src.retrieve import run_full_retrieval
+        from src.retrieve import run_full_retrieval, strip_enrichment
 
         sub_queries = state["sub_queries"]
 
@@ -104,6 +104,13 @@ def make_retriever_node(collection, bm25_index):
         # different sub-queries, so they are only approximately comparable.
         # That still beats the arbitrary planner ordering it replaces, and the
         # max-by-id merge is correct regardless of ordering.
+        # Normalise chunk_text on the way into context. A chunk found by both
+        # searches arrives with the enrichment header already stripped by the
+        # RRF merge, while a semantic-only chunk still carries it — so without
+        # this the synthesizer and the API see a mix, decided by which search
+        # matched rather than by anything about the chunk. Stripping here is
+        # safe: reranking has already run, so this cannot change what was
+        # retrieved, only what the text looks like downstream.
         best_by_id: dict[str, dict] = {}
         for results in per_query_results:
             for chunk in results:
@@ -111,7 +118,9 @@ def make_retriever_node(collection, bm25_index):
                     continue
                 incumbent = best_by_id.get(chunk["chunk_id"])
                 if incumbent is None or chunk.get("relevance_score", 0.0) > incumbent.get("relevance_score", 0.0):
-                    best_by_id[chunk["chunk_id"]] = chunk
+                    normalised = dict(chunk)
+                    normalised["chunk_text"] = strip_enrichment(chunk["chunk_text"])
+                    best_by_id[chunk["chunk_id"]] = normalised
 
         new_chunks = sorted(
             best_by_id.values(),

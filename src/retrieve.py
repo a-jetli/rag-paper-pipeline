@@ -10,6 +10,27 @@ RRF_K = 60          # RRF constant
 RRF_POOL_SIZE = 24  # candidates kept after RRF merge, before reranking
 
 
+ENRICHMENT_MARKER = "Content Passage:\n"
+
+
+def strip_enrichment(text: str) -> str:
+    """
+    Drop the "Paper Title / Abstract Summary" header from a stored passage.
+
+    The header exists to give each passage paper-level context *at embedding
+    time*, so a fragment like "the second approach performs better" lands in
+    the right semantic neighbourhood. That job is finished once the chunk has
+    been retrieved. It is a median 231 tokens — about 32% of a stored chunk —
+    and the synthesizer already prints the title and authors above every chunk
+    itself, so carrying it into the prompt duplicates what is already there.
+
+    Abstract chunks are stored without the header and pass through unchanged.
+    """
+    if ENRICHMENT_MARKER in text:
+        return text.split(ENRICHMENT_MARKER, 1)[1]
+    return text
+
+
 def _parse_results(results: dict, chunk_type: str) -> list[dict]:
     """
     Parse a ChromaDB query() response into a list of dicts.
@@ -78,12 +99,20 @@ def reciprocal_rank_fusion(
             # which strips the "Paper Title / Abstract Summary" enrichment
             # prefix (see BM25Index — it indexes stripped text so repeated
             # header terms don't inflate IDF). So a chunk matched by both
-            # signals gets the shorter, stripped text downstream (reranker
-            # and synthesizer both read chunk_text), while a chunk matched
-            # by semantic search alone keeps the full enriched text. Verified
-            # this doesn't change which chunks get selected in practice, but
-            # it does mean the exact text reaching the LLM isn't uniform
-            # across chunks for reasons unrelated to relevance.
+            # signals reaches the *reranker* as stripped body text, while a
+            # chunk matched by semantic search alone reaches it enriched.
+            #
+            # This is deliberately left as-is. Measured over 8 queries,
+            # normalising it in either direction changes which chunks the
+            # cross-encoder selects on 6 of them — on one query only 1 of 8
+            # survived. The header is not inert to the reranker, so picking a
+            # direction is a retrieval-quality decision that needs the eval
+            # harness, not a tidy-up. See TODO, backlog.
+            #
+            # What *was* fixed: the text handed to the synthesizer and the API
+            # is now normalised at the context boundary in retriever_node, so
+            # the LLM never sees a mix. That change cannot affect retrieval
+            # because reranking has already happened by then.
             rrf_scores[chunk_id]["data"].update(result)
         rrf_scores[chunk_id]["rrf_score"] += contribution
 
