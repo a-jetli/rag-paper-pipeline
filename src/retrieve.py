@@ -10,6 +10,7 @@ RRF_K = 60          # RRF constant
 RRF_POOL_SIZE = 24  # candidates kept after RRF merge, before reranking
 
 
+ENRICHMENT_PREFIX = "Paper Title:"
 ENRICHMENT_MARKER = "Content Passage:\n"
 
 
@@ -24,9 +25,15 @@ def strip_enrichment(text: str) -> str:
     and the synthesizer already prints the title and authors above every chunk
     itself, so carrying it into the prompt duplicates what is already there.
 
-    Abstract chunks are stored without the header and pass through unchanged.
+    Requires the text to actually *begin* with the header, not merely contain
+    the marker somewhere. Two inputs reach this function already stripped —
+    abstract records, which are stored without a header, and passages the RRF
+    merge overwrote with the BM25 copy — and a bare body that happened to quote
+    "Content Passage:" would otherwise be truncated at that point. No chunk in
+    the current corpus does, but that is a property of the data, not of the
+    code, and re-chunking could change it.
     """
-    if ENRICHMENT_MARKER in text:
+    if text.startswith(ENRICHMENT_PREFIX) and ENRICHMENT_MARKER in text:
         return text.split(ENRICHMENT_MARKER, 1)[1]
     return text
 
