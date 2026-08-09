@@ -3,11 +3,16 @@ from src.embed_store import embed_texts
 from src.bm25 import BM25Index
 from src.rerank import rerank
 
-TOP_K = 14          # semantic passage results
-ABSTRACT_K = 6      # semantic abstract results
-BM25_K = 20         # BM25 results (retrieve more, RRF will filter)
-RRF_K = 60          # RRF constant
-RRF_POOL_SIZE = 24  # candidates kept after RRF merge, before reranking
+# Semantic retrieval is split into two filtered queries whose sizes add to 20.
+# Abstracts get a reserved share because they are outnumbered ~23:1 by passages
+# and would otherwise never surface; 5 of 20 buys paper-level context without
+# spending a quarter of the pool on it.
+TOP_K = 15          # semantic passage results
+ABSTRACT_K = 5      # semantic abstract results
+BM25_K = 20         # BM25 results, matching the semantic side so neither signal
+                    # enters fusion with a structural advantage
+RRF_K = 60          # RRF constant, the value from the original TREC paper
+RRF_POOL_SIZE = 25  # candidates kept after RRF merge, before reranking
 
 
 ENRICHMENT_PREFIX = "Paper Title:"

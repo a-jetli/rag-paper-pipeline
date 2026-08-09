@@ -8,3 +8,6 @@ venv/
 .claude/
 data/pdfs/
 .DS_Store
+chroma_db.backup/
+rebuild.log
+scripts/.bench*.json

@@ -7,4 +7,7 @@ __pycache__/
 *.md
 .DS_Store
 .claude/
-!README.md
+!README.mdchroma_db/
+chroma_db.backup/
+rebuild.log
+scripts/.bench*.json

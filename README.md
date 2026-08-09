@@ -37,7 +37,7 @@ I didn't want a toy dataset where every query trivially finds its answer. The co
 
 It's built to make retrieval genuinely hard. Around 30 percent are papers I hand-picked: the field-defining works in each area (the original Transformer, BERT, ResNet, GANs, CLIP, DPR, ColBERT, and so on), so the known-important papers are guaranteed present. The rest are filled in per topic from arXiv keyword searches, filtered to stay on topic and recent enough to matter. Because many of these papers share heavy vocabulary across overlapping topics, the retrieval system has to actually discriminate rather than just pattern match on surface similarity.
 
-All papers are downloaded as PDFs, parsed into text, cleaned up (reference sections, page numbers, and layout junk get stripped), and split into chunks at sentence boundaries targeting ~500 tokens. That comes out to roughly 20,000 chunks across the corpus. Abstracts are pulled out and indexed separately so they always show up in retrieval results.
+All papers are downloaded as PDFs, parsed into text, cleaned up (reference sections, page numbers, and layout junk get stripped), and split into chunks at sentence boundaries targeting ~500 tokens. That comes out to 24,278 chunks across the corpus (23,278 passages plus one abstract per paper). Each chunk carries up to the last two sentences of the one before it, around 17% overlap, so a fact split across a boundary is retrievable from either side. Abstracts are pulled out and indexed separately so they always show up in retrieval results.
 
 
 ## How It Evolved
@@ -58,15 +58,15 @@ I also started extracting abstracts and indexing them as their own chunk type. B
 
 Smarter chunks helped with coherence, but the vocabulary mismatch problem was still there. Cosine similarity is fundamentally a bag of vectors operation. It doesn't know that "The Coverage Illusion" is a specific paper title rather than a generic phrase about coverage.
 
-BM25 solves this because it weights terms by inverse document frequency. A rare term like "Coverage Illusion" gets a high IDF weight, so BM25 naturally discriminates on proper nouns and coined terms. I added a BM25 index over all chunks and merged its rankings with the semantic results using Reciprocal Rank Fusion. A chunk that scores well on both signals gets boosted; a chunk that only shows up in one signal gets a lower combined score. The fusion produces about 20 candidates.
+BM25 solves this because it weights terms by inverse document frequency. A rare term like "Coverage Illusion" gets a high IDF weight, so BM25 naturally discriminates on proper nouns and coined terms. I added a BM25 index over all chunks and merged its rankings with the semantic results using Reciprocal Rank Fusion. A chunk that scores well on both signals gets boosted; a chunk that only shows up in one signal gets a lower combined score. The fusion produces 25 candidates.
 
 One subtle thing here: passage chunks are stored in ChromaDB with the paper's title and abstract prepended (for better embedding quality), but the BM25 index strips that enrichment prefix before indexing. Without the stripping, every chunk from the same paper would share identical title and abstract terms, which inflates BM25 term frequencies and defeats the whole purpose of IDF discrimination.
 
 ### Cross Encoder Reranking
 
-Twenty RRF candidates is better than five cosine results, but a lot of those 20 are marginally relevant. Both cosine similarity and BM25 score the query and each chunk independently. Neither one actually reads them together.
+Twenty-five RRF candidates is better than five cosine results, but a lot of them are marginally relevant. Both cosine similarity and BM25 score the query and each chunk independently. Neither one actually reads them together.
 
-A cross encoder reranker does. It takes the query and a candidate chunk as a single input and produces a relevance score with full cross attention between them. I send all 20 RRF candidates through the reranker, which scores each one and keeps the top 5. There is a low relevance floor too, but it mostly only matters when the question matches nothing in the corpus. Those few chunks become the tight, genuinely relevant context window.
+A cross encoder reranker does. It takes the query and a candidate chunk as a single input and produces a relevance score with full cross attention between them. I send all 25 RRF candidates through the reranker, which scores each one and keeps up to the top 8. There is a tiered relevance floor: a candidate the fast searches already ranked in the top 10 needs a moderate score, while one they barely surfaced needs a much higher one, on the reasoning that a high score with no upstream support is more likely a keyword coincidence than a discovery. Those few chunks become the tight, genuinely relevant context window.
 
 This started out on a hosted reranker API (Jina) and was later moved to FlashRank running locally, mainly to save on time and cost. The agent reranks once per sub query per retrieval pass, so a single compound query was firing a lot of billed API calls and waiting on network round trips each time. FlashRank runs on CPU with no API key, no per call cost, no network call, and no rate limiting to work around. On the CPU constrained deployment the reranker model itself became the slowest step, so I run the small 2 layer `ms-marco-TinyBERT-L-2-v2` model, which is about 20 times faster per call than the larger 12 layer model. It gives up a little ranking precision, but the synthesizer answers from partial context so the final answers hold up.
 
@@ -89,7 +89,7 @@ Here's what actually happens when you send a question:
 
 1. The **planner** classifies it and generates sub queries (or just wraps a simple query as is).
 
-2. For each sub query, the **retriever** fires three parallel searches: semantic over abstracts, semantic over passages, and BM25 keyword matching. The results merge through Reciprocal Rank Fusion into ~20 candidates, then the FlashRank cross encoder reranks and filters down to the top few. New chunks get deduplicated against anything accumulated from earlier passes.
+2. For each sub query, the **retriever** fires three parallel searches: semantic over abstracts, semantic over passages, and BM25 keyword matching. The results merge through Reciprocal Rank Fusion into 25 candidates, then the FlashRank cross encoder reranks and filters down to the top few. New chunks get deduplicated against anything accumulated from earlier passes.
 
 3. The **grader** reviews the total accumulated context and decides if it's sufficient. If not, and retries remain, the **reformulator** generates new queries and the retriever runs again.
 
@@ -110,6 +110,8 @@ The system is served through FastAPI with Uvicorn as the ASGI server, deployed o
 
 **POST /query** takes a JSON body with a `query` field and returns the answer, query classification (simple or compound), the sub queries used, retry count, all retrieved chunks with relevance scores, and deduplicated paper citations.
 
+**POST /query/stream** runs the same query as Server Sent Events, emitting a progress event as each graph node finishes and then the full result. This is what lets a frontend show which stage the pipeline is on instead of a bare spinner.
+
 ```bash
 curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
@@ -123,23 +125,40 @@ curl -X POST http://localhost:8000/query \
 
 ## Running Locally
 
+The built index is not in this repository. It is roughly 800MB of vectors and a serialized
+keyword index, which does not belong in Git. The two build scripts regenerate it from scratch,
+which is the intended path: you get the same corpus, and you can change the selection criteria
+and get a different one.
+
 ```bash
 pip install -r requirements.txt
 
 # Create a .env file with OPENAI_API_KEY
 
-# Build the corpus manifest, then the index (downloads ~1000 PDFs and populates ChromaDB)
+# Select the papers. Cheap, no PDFs downloaded, every arXiv response cached,
+# so you can tune the filters and re-run for free.
 python3 scripts/build_corpus_manifest.py
-python3 scripts/build_index.py
 
-# Pre build the BM25 cache (optional locally, required before deploying)
-python3 scripts/build_bm25_cache.py
+# Download, parse, chunk, embed, store. Then it rebuilds the BM25 index itself,
+# so the keyword index can never be left behind by a corpus rebuild.
+# ~20 minutes and ~$0.30 of embedding spend for 1,000 papers.
+python3 scripts/build_index.py
 
 # Interactive CLI
 python3 -m src.cli
 
 # Or start the API server
 uvicorn src.api:app --reload
+```
+
+`scripts/build_bm25_cache.py` exists but is not part of this path. It rebuilds the keyword
+index alone, for when Chroma is already correct and only the pickle needs replacing.
+
+Two checks worth running after a build:
+
+```bash
+python3 scripts/eval_anchor_recall.py   # do the hand-picked papers retrieve themselves?
+python3 scripts/bench_latency.py        # reranker, fan-out, embedding, cache, end-to-end
 ```
 
 
