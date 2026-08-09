@@ -48,9 +48,14 @@ if [ "$lfs_tracked" -lt "$staged_big" ]; then
     exit 1
 fi
 
+# The commit is deliberately parentless. The Space does not need history, and
+# carrying it actively breaks: HF validates that every LFS pointer in the pushed
+# history resolves to an object it still stores, so once an old corpus is deleted
+# to free space, any history referencing it is unpushable. An orphan commit also
+# means the Space never accumulates storage from superseded corpora.
 tree=$(git write-tree)
-commit=$(git commit-tree "$tree" -p main -m "deploy: main + prebuilt index (${chunks} chunks)")
+commit=$(git commit-tree "$tree" -m "deploy: $(git rev-parse --short main) + prebuilt index (${chunks} chunks)")
 
-echo "Built deploy commit ${commit:0:10} on top of $(git rev-parse --short main) (${chunks} chunks)."
+echo "Built orphan deploy commit ${commit:0:10} from main @ $(git rev-parse --short main) (${chunks} chunks)."
 echo "Pushing to the Space. This uploads ~800MB through LFS on a corpus change."
 git push -f huggingface "$commit:main"
