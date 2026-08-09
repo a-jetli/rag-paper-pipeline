@@ -2,6 +2,10 @@ import re
 import tiktoken
 
 CHUNK_SIZE = 500
+# Sentences carried from the end of one chunk into the start of the next, so a fact
+# split across a boundary is retrievable from either side. Two sentences lands around
+# 11% of a chunk; one sentence measured 5.8%, below the 10-15% target.
+CHUNK_OVERLAP_SENTENCES = 2
 
 
 def clean_inline_noise(text: str) -> str:
@@ -139,8 +143,21 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, tolerance_factor: float 
             chunk_text_str = " ".join(buffer)
             if chunk_text_str.strip() and len(encoding.encode(chunk_text_str, disallowed_special=())) >= 20:
                 chunks.append(chunk_text_str)
-            buffer = []
-            buffer_tokens = 0
+                overlap_count = min(CHUNK_OVERLAP_SENTENCES, len(buffer) - 1)
+                overlap = buffer[-overlap_count:] if overlap_count else []
+                overlap_tokens = sum(
+                    len(encoding.encode(item, disallowed_special=()))
+                    for item in overlap
+                )
+                if overlap_tokens + sentence_tokens <= threshold:
+                    buffer = overlap
+                    buffer_tokens = overlap_tokens
+                else:
+                    buffer = []
+                    buffer_tokens = 0
+            else:
+                buffer = []
+                buffer_tokens = 0
 
         buffer.append(sentence)
         buffer_tokens += sentence_tokens

@@ -24,10 +24,12 @@ from dotenv import load_dotenv
 from src.ingest import download_pdfs
 from src.parse import extract_text
 from src.chunk import chunk_text, extract_abstract, exclude_garbage_sections
+from src.bm25 import build_and_save
 from src.embed_store import embed_texts, store_chunks, get_collection
 
 MANIFEST_PATH = "data/corpus_manifest.json"
 PDF_DIR = "data/pdfs"
+BM25_CACHE_PATH = "chroma_db/bm25_index.pickle"
 # text-embedding-3-small pricing, used only for a rough live cost readout.
 EMBED_USD_PER_MTOKEN = 0.02
 
@@ -78,8 +80,12 @@ def main():
 
                 text = exclude_garbage_sections(raw_text)
 
-                abstract, abstract_end = extract_abstract(text)
-                passage_text = text[abstract_end:].lstrip() if abstract else text
+                extracted_abstract, abstract_end = extract_abstract(text)
+                passage_text = text[abstract_end:].lstrip() if extracted_abstract else text
+                manifest_abstract = paper.get("abstract", "")
+                if not isinstance(manifest_abstract, str):
+                    manifest_abstract = ""
+                abstract = extracted_abstract or manifest_abstract.strip()
 
                 chunks = chunk_text(passage_text)
                 if not chunks:
@@ -88,7 +94,7 @@ def main():
 
                 enriched_chunks = [
                     f"Paper Title: {paper['title']}\n"
-                    f"Abstract Summary: {paper['abstract']}\n"
+                    f"Abstract Summary: {manifest_abstract}\n"
                     f"Content Passage:\n{chunk_body}"
                     for chunk_body in chunks
                 ]
@@ -119,7 +125,16 @@ def main():
     print(f"\nDone. {indexed} new papers indexed ({total_chunks} chunks), "
           f"{skipped} already present, {failed} skipped/failed.")
     print(f"Estimated embedding spend this run: ~${est_cost:.2f}")
-    print("\nNext step: python scripts/build_bm25_cache.py  (rebuild the keyword index)")
+
+    # Rebuild the keyword index here rather than leaving it as a second command.
+    # BM25 is derived from Chroma, so skipping this step leaves the two describing
+    # different corpora and retrieval silently degrades with no error anywhere.
+    if indexed:
+        print("\nRebuilding the BM25 keyword index from Chroma...")
+        bm25_index = build_and_save(collection, BM25_CACHE_PATH)
+        print(f"Saved {BM25_CACHE_PATH} ({bm25_index.chunk_count} chunks)")
+    else:
+        print("\nNo new papers indexed; BM25 cache left as is.")
 
 
 if __name__ == "__main__":

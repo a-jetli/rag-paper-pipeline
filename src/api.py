@@ -1,23 +1,66 @@
 import os
 import json
 import asyncio
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
+import logging
+from contextlib import aclosing, asynccontextmanager
+from datetime import datetime, timezone
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
 load_dotenv()
 
 from src.embed_store import get_collection
-from src.bm25 import BM25Index
+from src.bm25 import BM25Index, documents_from_collection
 from src.agent.graph import build_graph
+
+logger = logging.getLogger(__name__)
 
 agent = None
 papers_index = []
 
 BM25_CACHE_PATH = "chroma_db/bm25_index.pickle"
 MANIFEST_PATH = "data/corpus_manifest.json"
+STREAM_STAGES = frozenset({"planner", "retriever", "grader", "reformulator", "synthesizer"})
+
+
+def _load_bm25_index(collection) -> BM25Index:
+    """
+    Load the prebuilt BM25 index, rebuilding in memory only if it can't be used.
+
+    The staleness check is a chunk-count comparison, not a content hash. Hashing
+    the corpus would mean reading all ~20k documents out of Chroma on every boot
+    (~1s), which is the exact cost the cached index exists to avoid. Counting is
+    a metadata lookup (~0.04s).
+
+    Drift is mostly prevented upstream: scripts/build_index.py rebuilds this
+    cache itself once it finishes writing Chroma, so the two cannot diverge
+    through the normal path. This check only catches a restored backup or an
+    interrupted build.
+    """
+    if os.path.exists(BM25_CACHE_PATH):
+        bm25_index = BM25Index.load(BM25_CACHE_PATH)
+        is_current, reason = bm25_index.matches_collection(collection)
+        if is_current:
+            logger.info("Loaded BM25 cache from %s (%s)", BM25_CACHE_PATH, reason)
+            return bm25_index
+        logger.warning(
+            "BM25 cache at %s is stale (%s); rebuilding from Chroma in memory. "
+            "Run scripts/build_bm25_cache.py to replace the cache.",
+            BM25_CACHE_PATH,
+            reason,
+        )
+    else:
+        logger.warning(
+            "BM25 cache not found at %s; rebuilding from Chroma in memory. "
+            "Run scripts/build_bm25_cache.py to persist it.",
+            BM25_CACHE_PATH,
+        )
+
+    return BM25Index(documents_from_collection(collection))
 
 
 @asynccontextmanager
@@ -25,29 +68,7 @@ async def lifespan(app: FastAPI):
     global agent
 
     collection = get_collection()
-
-    if os.path.exists(BM25_CACHE_PATH):
-        bm25_index = BM25Index.load(BM25_CACHE_PATH)
-    else:
-        all_data = collection.get(include=["documents", "metadatas"])
-        documents = []
-        for i, (doc_text, metadata) in enumerate(zip(all_data["documents"], all_data["metadatas"])):
-            bm25_text = doc_text
-            if metadata["chunk_type"] == "passage":
-                marker = "Content Passage:\n"
-                marker_pos = doc_text.find(marker)
-                if marker_pos != -1:
-                    bm25_text = doc_text[marker_pos + len(marker):]
-            documents.append({
-                "chunk_text": bm25_text,
-                "chunk_id": all_data["ids"][i],
-                "paper_id": metadata["paper_id"],
-                "title": metadata["title"],
-                "authors": metadata["authors"],
-                "chunk_index": metadata["chunk_index"],
-                "chunk_type": metadata["chunk_type"],
-            })
-        bm25_index = BM25Index(documents)
+    bm25_index = _load_bm25_index(collection)
 
     agent = build_graph(collection, bm25_index)
 
@@ -115,6 +136,14 @@ class QueryResponse(BaseModel):
     citations: list[CitationResponse]
 
 
+def _timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _sse_event(event: str, payload: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
+
+
 @app.post("/query", response_model=QueryResponse)
 async def query(req: QueryRequest):
     # agent.invoke() is synchronous and does the whole request's work — OpenAI
@@ -158,6 +187,100 @@ async def query(req: QueryRequest):
         retries=max(0, result["retry_count"] - 1),
         chunks=chunks,
         citations=citations,
+    )
+
+
+@app.post("/query/stream")
+async def query_stream(req: QueryRequest, request: Request):
+    async def events():
+        yield _sse_event("progress", {"stage": "started", "timestamp": _timestamp()})
+
+        latest_state = None
+        try:
+            stream = agent.astream(
+                {
+                    "original_query": req.query,
+                    "is_compound": False,
+                    "sub_queries": [],
+                    "all_sub_queries": [],
+                    "accumulated_context": [],
+                    "context_sufficient": False,
+                    "missing_elements": [],
+                    "retry_count": 0,
+                    "final_answer": "",
+                    "citations": [],
+                },
+                stream_mode=["updates", "values"],
+            )
+            async with aclosing(stream):
+                async for mode, update in stream:
+                    if await request.is_disconnected():
+                        return
+                    if mode == "values":
+                        latest_state = update
+                        continue
+                    for stage in update:
+                        if stage in STREAM_STAGES:
+                            yield _sse_event(
+                                "progress",
+                                {"stage": stage, "timestamp": _timestamp()},
+                            )
+
+            if latest_state is None or await request.is_disconnected():
+                return
+
+            chunks = [
+                ChunkResponse(
+                    chunk_id=chunk.get("chunk_id", ""),
+                    title=chunk["title"],
+                    authors=chunk["authors"],
+                    paper_id=chunk["paper_id"],
+                    chunk_text=chunk["chunk_text"],
+                    score=chunk.get("relevance_score", chunk.get("rrf_score", 0)),
+                )
+                for chunk in latest_state["accumulated_context"]
+            ]
+            citations = [
+                CitationResponse(
+                    title=item["title"],
+                    authors=item["authors"],
+                    paper_id=item["paper_id"],
+                )
+                for item in latest_state["citations"]
+            ]
+            response = QueryResponse(
+                answer=latest_state["final_answer"],
+                query_type="compound" if latest_state["is_compound"] else "simple",
+                sub_queries=latest_state["sub_queries"],
+                all_sub_queries=latest_state["all_sub_queries"],
+                retries=max(0, latest_state["retry_count"] - 1),
+                chunks=chunks,
+                citations=citations,
+            )
+            yield _sse_event(
+                "complete",
+                {
+                    "stage": "complete",
+                    "timestamp": _timestamp(),
+                    **jsonable_encoder(response),
+                },
+            )
+        except Exception:
+            logger.exception("Streaming query failed")
+            if not await request.is_disconnected():
+                yield _sse_event(
+                    "error",
+                    {
+                        "stage": "error",
+                        "timestamp": _timestamp(),
+                        "message": "Query failed before completion.",
+                    },
+                )
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
