@@ -15,7 +15,7 @@ load_dotenv()
 
 from src.embed_store import get_collection
 from src.bm25 import BM25Index, documents_from_collection
-from src.agent.graph import build_graph
+from src.agent.graph import build_graph, route_after_grader
 
 logger = logging.getLogger(__name__)
 
@@ -220,11 +220,18 @@ async def query_stream(req: QueryRequest, request: Request):
                         latest_state = update
                         continue
                     for stage in update:
-                        if stage in STREAM_STAGES:
-                            yield _sse_event(
-                                "progress",
-                                {"stage": stage, "timestamp": _timestamp()},
-                            )
+                        if stage not in STREAM_STAGES:
+                            continue
+                        payload = {"stage": stage, "timestamp": _timestamp()}
+                        # Every event here reports a node that just *finished*, so
+                        # a client showing "what is running now" has to look one
+                        # step ahead. That is unambiguous everywhere except after
+                        # the grader, which is the only branch in the graph. Send
+                        # the routing decision rather than making the client infer
+                        # it and correct itself a second later.
+                        if stage == "grader":
+                            payload["next"] = route_after_grader(update[stage])
+                        yield _sse_event("progress", payload)
 
             if latest_state is None or await request.is_disconnected():
                 return

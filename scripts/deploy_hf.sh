@@ -17,6 +17,16 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
+# --source-only reuses the chroma_db subtree already on the Space instead of the
+# local one. Use it whenever only code changed. Merely opening the corpus locally
+# rewrites chroma.sqlite3 (see the count below), so the local copy is usually
+# byte-different from the deployed one even when the data is identical — and a
+# byte difference means a fresh 588MB upload for nothing.
+SOURCE_ONLY=0
+if [ "${1:-}" = "--source-only" ]; then
+    SOURCE_ONLY=1
+fi
+
 if [ ! -f chroma_db/bm25_index.pickle ] || [ ! -f chroma_db/chroma.sqlite3 ]; then
     echo "chroma_db/ is missing or incomplete. Run scripts/build_index.py first." >&2
     exit 1
@@ -44,15 +54,27 @@ export GIT_INDEX_FILE
 trap 'rm -f "$GIT_INDEX_FILE"' EXIT
 
 git read-tree main
-git add -f chroma_db/
 
-# Everything large must be an LFS pointer. A 576MB blob committed as a plain Git
-# object is painful to undo, so fail loudly rather than discover it mid-push.
-staged_big=$(git diff --cached --name-only main -- chroma_db | wc -l | tr -d ' ')
-lfs_tracked=$(git lfs status | grep -c 'LFS:' || true)
-if [ "$lfs_tracked" -lt "$staged_big" ]; then
-    echo "Only $lfs_tracked of $staged_big chroma_db files are LFS-tracked. Check .gitattributes." >&2
-    exit 1
+if [ "$SOURCE_ONLY" = "1" ]; then
+    git fetch -q huggingface main
+    if ! git rev-parse -q --verify FETCH_HEAD:chroma_db >/dev/null; then
+        echo "The Space has no chroma_db to reuse. Deploy without --source-only." >&2
+        exit 1
+    fi
+    # Graft the corpus the Space already holds. Its LFS pointers are objects the
+    # remote already stores, so this uploads nothing.
+    git read-tree --prefix=chroma_db/ FETCH_HEAD:chroma_db
+    echo "Reusing the corpus already on the Space; only source files will upload."
+else
+    git add -f chroma_db/
+    # Everything large must be an LFS pointer. A 588MB blob committed as a plain
+    # Git object is painful to undo, so fail loudly rather than find out mid-push.
+    staged_big=$(git diff --cached --name-only main -- chroma_db | wc -l | tr -d ' ')
+    lfs_tracked=$(git lfs status | grep -c 'LFS:' || true)
+    if [ "$lfs_tracked" -lt "$staged_big" ]; then
+        echo "Only $lfs_tracked of $staged_big chroma_db files are LFS-tracked. Check .gitattributes." >&2
+        exit 1
+    fi
 fi
 
 # The commit is deliberately parentless. The Space does not need history, and
