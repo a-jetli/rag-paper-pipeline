@@ -86,5 +86,9 @@ tree=$(git write-tree)
 commit=$(git commit-tree "$tree" -m "deploy: $(git rev-parse --short main) + prebuilt index (${chunks} chunks)")
 
 echo "Built orphan deploy commit ${commit:0:10} from main @ $(git rev-parse --short main) (${chunks} chunks)."
-echo "Pushing to the Space. This uploads ~800MB through LFS on a corpus change."
+if [ "$SOURCE_ONLY" = "1" ]; then
+    echo "Pushing to the Space (source only; the corpus is already there)."
+else
+    echo "Pushing to the Space. This uploads ~850MB through LFS."
+fi
 git push -f huggingface "$commit:main"
