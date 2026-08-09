@@ -27,9 +27,16 @@ if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
     exit 1
 fi
 
+# Read the count straight out of SQLite in read-only mode. Opening the collection
+# through Chroma rewrites chroma.sqlite3 — verified: the file's sha256 changes on
+# a bare .count(). Since the LFS object ID *is* that hash, letting Chroma touch
+# the file here would mint a byte-different 588MB blob on every single deploy and
+# re-upload the whole thing. Anything that opens the corpus before a push costs
+# you 588MB of remote storage.
 chunks=$(python3 -c "
-import chromadb
-print(chromadb.PersistentClient(path='chroma_db').get_collection('arxiv_papers').count())
+import sqlite3
+c = sqlite3.connect('file:chroma_db/chroma.sqlite3?mode=ro', uri=True)
+print(c.execute('SELECT COUNT(*) FROM embeddings').fetchone()[0])
 ")
 
 GIT_INDEX_FILE="$(mktemp -t rag-deploy-index)"
